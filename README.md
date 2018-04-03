@@ -18,7 +18,8 @@ Required
 Extra Credit
 -------------
 
-- Additional indirection using multiple indexing layers.  There are points for single indirect and more for double indirect.
+Additional indirection using multiple indexing layers.  There are points for single indirect and more for double indirect.
+
 	int opendir(char* path)
 	int closedir(int directoryID)
 	int mkdir(char* path)
