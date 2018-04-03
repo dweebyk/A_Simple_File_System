@@ -1,0 +1,10 @@
+enclosed are a set of instructions to pull into a nonempty repository taken from stackexchange.  This should help pull into your own assignment3 folder
+
+git init
+git remote add origin PATH/TO/REPO
+git fetch
+git reset origin/master  # this is required if files in the non-empty directory are in the repo
+git checkout -t origin/master
+
+Here's the source link:
+https://stackoverflow.com/questions/2411031/how-do-i-clone-into-a-non-empty-directory

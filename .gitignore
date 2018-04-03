@@ -1,0 +1,9 @@
+#All that we really need is one file, and the rest is handled in our individual configures
+
+#ignoring anything in the assignment folder
+
+aclocal.m4 AUTHORS autogen.sh ChangeLog compile config.log config.status configure configure.ac COPYING depcomp example INSTALL install-sh Makefile Makefile.am Makefile.in missing NEWS README README.md
+
+#ignoring anything in the src folder
+
+block.c block.h config.h config.h.in fuse.h log.c log.h Makefile Makefile.am Makefile.in mount_disk_ask171.sh params.h sfs.log stamp-h1 unmount_disk_ask171.sh
