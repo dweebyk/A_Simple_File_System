@@ -29,6 +29,33 @@
 
 #include "log.h"
 
+#define MAX_FILES 128
+#define MAX_FILE_SIZE 1000 //didn't do math yet
+#define NUM_NODES 128
+#define VER 987
+
+typedef struct _inode
+{
+	int node; //inode number;
+	int link_count;
+	uid_t user;
+	gid_t group;
+	size_t size;
+	int mode;
+	char* name; //don't know if it needs this. Unix stores it in dir structure
+	int* data_blocks;
+
+} inode;
+
+typedef struct _super_block
+{
+	int verify; //is this our filesystem?
+	int num_files;
+	inode** node_list;
+	char* free_list;
+} super_block;
+
+
 
 ///////////////////////////////////////////////////////////
 //
@@ -48,9 +75,43 @@
  */
 void *sfs_init(struct fuse_conn_info *conn)
 {
-    fprintf(stderr, "in bb-init\n");
+    fprintf(stderr, "in sfs_init\n");
     log_msg("\nsfs_init()\n");
     
+    disk_open(SFS_DATA->diskfile);
+    superblock sblock=malloc(sizeof(superblock));
+    char* block_buff=malloc(BLOCK_SIZE);
+    int check=block_read(0,block_buff);
+    if(check<=0)
+    {
+	    //fs is not inited, so init it
+	    log_msg("\nfs file not inited\n");
+	    sblock->verify=VER;
+	    sblock->free_list=calloc(MAX_FILES);
+	    sblock->node_list=calloc(MAX_FILES*sizeof(inode));//implicit free list should be init to 0's
+	    sblock->num_files=0;
+	    block_write(0,(void*)&sblock);
+	    inode first=malloc(sizeof(inode));
+
+		//...
+
+	    log_msg("\nfinished initing fs\n");
+    }
+    else
+    {
+    	//see if it is actually our fs
+	memcpy(&sblock,block_buff,sizeof(superblock));
+	if(sblock->verify!=VER)
+	{
+		log_msg("\nnot our fs, exiting failure\n");
+		exit(EXIT_FAILURE);
+	}
+	//otherwise it's fine
+	log_msg("\nsuccesfully opened fs file\n");
+    }
+    
+    
+
     log_conn(conn);
     log_fuse_context(fuse_get_context());
 
@@ -79,9 +140,20 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 {
     int retstat = 0;
     char fpath[PATH_MAX];
-    
-    log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n",
-	  path, statbuf);
+    log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n",path, statbuf);
+    //assuming only dir is root
+    if(strcmp("/",path)==0)//or whatever root dir's name is
+    {
+
+    }
+    else
+    {
+    	statbuf->st_uid=getuid();
+    	statbuf->st_gid=getgid();
+   	statbuf->st_mode=(S_IRWXU|S_IRWXG|S_IRWXO);
+   	statbuf->st_nlink=1;//only one link to each file
+    	//...
+    }
     
     return retstat;
 }
@@ -113,7 +185,7 @@ int sfs_unlink(const char *path)
 {
     int retstat = 0;
     log_msg("sfs_unlink(path=\"%s\")\n", path);
-
+    //look at unistd unlink fuction
     
     return retstat;
 }
