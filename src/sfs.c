@@ -34,6 +34,20 @@
 #define NUM_NODES 128
 #define VER 987
 
+#define VOLUME_SIZE 16777216
+
+
+
+/**
+ *  Things that go into flat file (in order)
+ *  Superblock
+ *  inode list (represented by a bitmap)
+ *  data block list (represented by a bitmap)
+ *  inodes
+ *  data blocks
+ */
+
+
 typedef struct _inode
 {
 	int node; //inode number;
@@ -51,11 +65,27 @@ typedef struct _super_block
 {
 	int verify; //is this our filesystem?
 	int num_files;
-	inode** node_list;
-	char* free_list;
+	long long node_list[NUM_NODES / 64]; //2 ints, 64 bits each, so 128 bits in total to address 
+	int block_list[(VOLUME_SIZE - (sizeof()))/BLOCK_SIZE];
 } super_block;
 
+typedef struct dir_ {
+	char  name[256]; //its own name in the form of an absolute 
+	struct name_list 
+	{
+		char * name;
+		int type:1; //0 if file, 1 if dir
+		struct name_list * next; //next name 
+	};
+	
+	
+} dir;
 
+
+//int block_list = (VOLUME_SIZE - ( sizeof(super_block + NUM_NODES*sizeof(inodes)) ));
+
+char* block_buff=malloc(BLOCK_SIZE);
+super_block * sblock=malloc(sizeof(super_block));
 
 ///////////////////////////////////////////////////////////
 //
@@ -79,8 +109,6 @@ void *sfs_init(struct fuse_conn_info *conn)
     log_msg("\nsfs_init()\n");
     
     disk_open(SFS_DATA->diskfile);
-    superblock sblock=malloc(sizeof(superblock));
-    char* block_buff=malloc(BLOCK_SIZE);
     int check=block_read(0,block_buff);
     if(check<=0)
     {
@@ -90,17 +118,18 @@ void *sfs_init(struct fuse_conn_info *conn)
 	    sblock->free_list=calloc(MAX_FILES);
 	    sblock->node_list=calloc(MAX_FILES*sizeof(inode));//implicit free list should be init to 0's
 	    sblock->num_files=0;
-	    block_write(0,(void*)&sblock);
+	    block_write(0,(void*)sblock);
 	    inode first=malloc(sizeof(inode));
 
 		//...
 
+	    
 	    log_msg("\nfinished initing fs\n");
     }
     else
     {
     	//see if it is actually our fs
-	memcpy(&sblock,block_buff,sizeof(superblock));
+	memcpy(sblock,block_buff,sizeof(superblock));
 	if(sblock->verify!=VER)
 	{
 		log_msg("\nnot our fs, exiting failure\n");
@@ -128,6 +157,13 @@ void *sfs_init(struct fuse_conn_info *conn)
 void sfs_destroy(void *userdata)
 {
     log_msg("\nsfs_destroy(userdata=0x%08x)\n", userdata);
+    memcpy(block_buff, sblock, sizeof(sblock) );
+    block_write(0, sblock); 
+    //until further notice, assume that appropriate inodes have been updated.  Will revisit after rest of implementation
+    free(block_buff);
+    free(sblock); 
+    disk_close(SFS_DATA->diskfile);
+    
 }
 
 /** Get file attributes.
@@ -250,7 +286,19 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
     int retstat = 0;
     log_msg("\nsfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
 	    path, buf, size, offset, fi);
-
+    
+   int position = 0;  
+   inode * file_i;
+   /**
+   * (using inodes) code to parse directory path into a position into a block number
+   * still going under assumption of direct mapping, so account for a single inode case
+   */
+   position = file_i->data_blocks[0];
+   block_read(position, block_buff);
+   for (; retstat < size; retstat++)
+   {
+	buf[retstat] = block_buff[offset + retstat];
+   }
    
     return retstat;
 }
