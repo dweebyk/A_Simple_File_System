@@ -582,8 +582,31 @@ int sfs_opendir(const char *path, struct fuse_file_info *fi)
 int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
 	       struct fuse_file_info *fi)
 {
+    
     int retstat = 0;
 
+    superblock sb;
+    char* block_buff = malloc(BLOCK_SIZE);
+    block_read(0,block_buff);
+    memcpy(&sb,block_buff,sizeof(superblock));
+
+    int i;
+    inode node;
+    for(i=0; i<sb.num_files; i++)
+    {
+	if(sb.node_list[i] == '0')
+	{
+	    block_read(i+NODE_STRT, block_buff);
+	    memcpy(&node, block_buff, sizeof(inode));
+	    if(filler(buf, node.name, NULL, 0) != 0)
+	    {
+		log_msg("Buffer is full!\n");
+		return -ENOMEM;
+	    }
+	}
+    }
+    free(block_buff);		
+/*
     DIR *dir;
     struct dirent *dir_entry;
 
@@ -603,7 +626,7 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
 	    return -ENOMEM;
 	}
     }while ((dir_entry = readdir(dir)) != NULL);
-
+*/
     log_msg("\nsfs_readdir(path = \"%s\", fi=0x%08x)\n", path, fi);
     
     
