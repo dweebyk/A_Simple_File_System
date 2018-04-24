@@ -29,63 +29,62 @@
 
 #include "log.h"
 
-#define MAX_FILES 128
-#define MAX_FILE_SIZE 1000 //didn't do math yet
+// ------------------------------------------------------------------------------------------------------
+// |superBlock (1)| Inodes (128)| Indirect Blocks (192)| Double I. Blocks (1)| data block metadata (56) |
+// ------------------------------------------------------------------------------------------------------
+// units in () are meassured in disk blocks
+
 #define NUM_NODES 128
+#define NODE_STRT 1
+#define IBLK_STRT 129
+#define DIBLK 321
+#define MDATA_STRT 322
+#define INDIR_DATA 378
+#define DISK_STRT 379
+#define DISK_END 29051 //not inclusive
 #define VER 987
-
-#define VOLUME_SIZE 16777216
-
-
-
-/**
- *  Things that go into flat file (in order)
- *  Superblock
- *  inode list (represented by a bitmap)
- *  data block list (represented by a bitmap)
- *  inodes
- *  data blocks
- */
-
 
 typedef struct _inode
 {
-	int node; //inode number;
+	int node_num;
+	mode_t mode;
 	int link_count;
-	uid_t user;
-	gid_t group;
 	size_t size;
-	int mode;
-	char* name; //don't know if it needs this. Unix stores it in dir structure
-	int* data_blocks;
-
+	long access;
+	long modify;
+	long change;
+	int direct[32];
+	int single_indirect[64];
+	int double_indirect;
+	char name[50];
+	int fh; //place to start from in the file
 } inode;
+
+typedef struct _indirect
+{
+	int blocks[128]; //list of block numbers of file
+} indirect;
+
+typedef struct _indir_data
+{
+	char indir_blocks[192]; //is the indirect block used or not
+	char d_indir_block; //is the one double indirect block used or not
+} indir_data;
+
+typedef struct _data_list
+{
+	//could have made this more efficient with bit-wise operations, but less mistakes this way
+	//also have the room
+	char data[512];
+} data_list;
 
 typedef struct _super_block
 {
 	int verify; //is this our filesystem?
-	int num_files;
-	long long node_list[NUM_NODES / 64]; //2 ints, 64 bits each, so 128 bits in total to address 
-	int block_list[(VOLUME_SIZE - (sizeof()))/BLOCK_SIZE];
-} super_block;
+	int num_files; //number of current files
+	char node_list[NUM_NODES]; //bit-vector to keep track of unsued inode blocks
+} superblock;
 
-typedef struct dir_ {
-	char  name[256]; //its own name in the form of an absolute 
-	struct name_list 
-	{
-		char * name;
-		int type:1; //0 if file, 1 if dir
-		struct name_list * next; //next name 
-	};
-	
-	
-} dir;
-
-
-//int block_list = (VOLUME_SIZE - ( sizeof(super_block + NUM_NODES*sizeof(inodes)) ));
-
-char* block_buff=malloc(BLOCK_SIZE);
-super_block * sblock=malloc(sizeof(super_block));
 
 ///////////////////////////////////////////////////////////
 //
@@ -105,32 +104,53 @@ super_block * sblock=malloc(sizeof(super_block));
  */
 void *sfs_init(struct fuse_conn_info *conn)
 {
-    fprintf(stderr, "in sfs_init\n");
+    //fprintf(stderr, "in sfs_init\n");
     log_msg("\nsfs_init()\n");
     
     disk_open(SFS_DATA->diskfile);
+    superblock sblock;
+    char* block_buff=malloc(BLOCK_SIZE);
     int check=block_read(0,block_buff);
     if(check<=0)
     {
 	    //fs is not inited, so init it
+	    int i;
 	    log_msg("\nfs file not inited\n");
-	    sblock->verify=VER;
-	    sblock->free_list=calloc(MAX_FILES);
-	    sblock->node_list=calloc(MAX_FILES*sizeof(inode));//implicit free list should be init to 0's
-	    sblock->num_files=0;
-	    block_write(0,(void*)sblock);
-	    inode first=malloc(sizeof(inode));
+	    sblock.verify=VER;
+	    sblock.num_files=0;
+	    for(i=0;i<NUM_NODES;i++)
+	    {
+		    sblock.node_list[i]='0';
+	    }
+	    memcpy(block_buff,&sblock,sizeof(superblock));
+	    block_write(0,block_buff);
+	    data_list metadata;
+	    for(i=0;i<512;i++)
+	    {
+		    metadata.data[i]='0';
+	    }
+	    memcpy(block_buff,&metadata,sizeof(data_list));
+	    for(i=MDATA_STRT;i<INDIR_DATA;i++)
+	    {
+		    //initialize all metadatas to empty
+		block_write(i,block_buff);
+	    }
+	    indir_data indir;
+	    for(i=0;i<192;i++)
+	    {
+		indir.indir_blocks[i]='0';
+	    }
+	    indir.d_indir_block='0';
+	    memcpy(block_buff,&indir,sizeof(indir_data));
+	    block_write(INDIR_DATA,block_buff);
 
-		//...
-
-	    
 	    log_msg("\nfinished initing fs\n");
     }
     else
     {
     	//see if it is actually our fs
-	memcpy(sblock,block_buff,sizeof(superblock));
-	if(sblock->verify!=VER)
+	memcpy(&sblock,block_buff,sizeof(superblock));
+	if(sblock.verify!=VER)
 	{
 		log_msg("\nnot our fs, exiting failure\n");
 		exit(EXIT_FAILURE);
@@ -138,11 +158,11 @@ void *sfs_init(struct fuse_conn_info *conn)
 	//otherwise it's fine
 	log_msg("\nsuccesfully opened fs file\n");
     }
-    
+    free(block_buff);
     
 
     log_conn(conn);
-    log_fuse_context(fuse_get_context());
+    //log_fuse_context(fuse_get_context());
 
     return SFS_DATA;
 }
@@ -156,14 +176,9 @@ void *sfs_init(struct fuse_conn_info *conn)
  */
 void sfs_destroy(void *userdata)
 {
+	//nothing to do
+	//everything gets written as it happens
     log_msg("\nsfs_destroy(userdata=0x%08x)\n", userdata);
-    memcpy(block_buff, sblock, sizeof(sblock) );
-    block_write(0, sblock); 
-    //until further notice, assume that appropriate inodes have been updated.  Will revisit after rest of implementation
-    free(block_buff);
-    free(sblock); 
-    disk_close(SFS_DATA->diskfile);
-    
 }
 
 /** Get file attributes.
@@ -177,20 +192,47 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     int retstat = 0;
     char fpath[PATH_MAX];
     log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n",path, statbuf);
-    //assuming only dir is root
-    if(strcmp("/",path)==0)//or whatever root dir's name is
+    superblock sb;
+    char* block_buff=malloc(BLOCK_SIZE);
+    block_read(0,block_buff);
+    memcpy(&sb,block_buff,sizeof(superblock));
+    int i;
+    inode node;
+    //find the file
+    for(i=0;i<sb.num_files;i++)
     {
-
+	    block_read(i+NODE_STRT,block_buff);
+	    memcpy(&node,block_buff,sizeof(inode));
+	    if(strcmp(&path[1],node.name)==0)
+	    {
+		    break;
+	    }
+    }
+    if(i==sb.num_files)
+    {
+	    log_msg("\ncould not find file to getattr\n");
+	    retstat=-1;
     }
     else
     {
+	//fill stat
     	statbuf->st_uid=getuid();
     	statbuf->st_gid=getgid();
-   	statbuf->st_mode=(S_IRWXU|S_IRWXG|S_IRWXO);
-   	statbuf->st_nlink=1;//only one link to each file
-    	//...
+	//statbuf->st_blksize=(blksize_t)512;
+   	statbuf->st_mode=node.mode;
+   	statbuf->st_nlink=node.link_count;
+	statbuf->st_size=node.size;
+	float num_blocks=(node.size)/512.0;
+	if(num_blocks-(int)num_blocks!=0)
+	{
+		num_blocks++;
+	}
+	statbuf->st_blocks=(blkcnt_t)(num_blocks);
+	statbuf->st_atime=node.access;
+	statbuf->st_mtime=node.modify;
+	statbuf->st_ctime=node.change;
     }
-    
+    free(block_buff);
     return retstat;
 }
 
@@ -209,10 +251,60 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     int retstat = 0;
-    log_msg("\nsfs_create(path=\"%s\", mode=0%03o, fi=0x%08x)\n",
-	    path, mode, fi);
-    
-    
+    log_msg("\nsfs_create(path=\"%s\", mode=0%03o, fi=0x%08x)\n",path, mode, fi);
+    if(strlen(path)>50)
+    {
+	    //file name too long
+	    log_msg("\nfile name too long\n");
+	    retstat=-1;
+	    return retstat;
+    }
+    superblock sb;
+    char* block_buff=malloc(BLOCK_SIZE);
+    block_read(0,block_buff);
+    memcpy(&sb,block_buff,sizeof(superblock));
+    if(sb.num_files==NUM_NODES)
+    {
+	    //fs is full
+	    log_msg("\nfs is full\n");
+	    retstat=-1;
+	    return retstat;
+    }
+    int i,pos=0;
+    for(i=0;i<NUM_NODES;i++)
+    {
+	    //find empty inode
+	    if(sb.node_list[i]=='0')
+	    {
+		sb.node_list[i]='1';
+		pos=i;
+		break;
+	    }
+    }
+    //initialize new inode
+    inode new;
+    new.node_num=i;
+    new.mode=mode;
+    new.link_count=1;
+    new.size=0;
+    new.access=(long)time(NULL);
+    new.modify=new.access;
+    new.change=new.access;
+    for(i=0;i<32;i++)
+    {
+	    new.direct[i]=-1;
+    }
+    for(i=0;i<64;i++)
+    {
+	    new.single_indirect[i]=-1;
+    }
+    new.double_indirect=-1;
+    strcpy(new.name,&(path[1]));
+    new.fh=0;
+    memcpy(block_buff,&new,sizeof(inode));
+    block_write(pos+NODE_STRT,block_buff);
+
+    log_msg("\nsfs_create finished\n");
     return retstat;
 }
 
@@ -221,8 +313,124 @@ int sfs_unlink(const char *path)
 {
     int retstat = 0;
     log_msg("sfs_unlink(path=\"%s\")\n", path);
-    //look at unistd unlink fuction
     
+    int i;
+    superblock sb;
+    inode node;
+    char* block_buff=malloc(BLOCK_SIZE);
+    block_read(0,block_buff);
+    memcpy(&sb,block_buff,sizeof(superblock));
+    //mark the inode as free
+    for(i=0;i<NUM_NODES;i++)
+    {
+	if(sb.node_list[i]=='1')
+	{
+		block_read(i+NODE_STRT,block_buff);
+		memcpy(&node,block_buff,sizeof(inode));
+		if(strcmp(node.name,&(path[1]))==0)
+		{
+			sb.node_list[i]='0';
+			break;
+		}
+	}
+    }
+    if(i==NUM_NODES)
+    {
+	    log_msg("\ndid not find file\n");
+	    retstat=-1;
+	    return retstat;
+    }
+    //mark all data disk blocks associated with the file as free
+    //direct blocks
+    data_list metadata;
+    for(i=0;i<32;i++)
+    {
+	    int block=node.direct[i];
+	    if(block!=-1)
+	    {
+	    	block=block-DISK_STRT; //first,second,third,... data block. block=[0,28671]
+	    	int md_block=block/512; //find which of the 56 metadata blocks holds this ones data. md_block=[0,55]
+	    	int md_index=block%512; //find index of this block's data in metadata block. md_index=[0,511]
+	    	block_read(md_block+MDATA_STRT,block_buff); //get metadata block holding info for this data block
+		memcpy(&metadata,block_buff,sizeof(data_list)); 
+		metadata.data[md_index]='0';
+		memcpy(block_buff,&metadata,sizeof(data_list));
+		block_write(md_block+MDATA_STRT,block_buff);
+	    }
+    }	   
+    //single indirect blocks
+    indir_data indir; //metadata struct for all indirect blocks
+    indirect i_block; //indirect block struct 
+    block_read(INDIR_DATA,block_buff);
+    memcpy(&indir,block_buff,sizeof(indir_data));
+    for(i=0;i<64;i++)
+    {
+	    int block=node.single_indirect[i];
+	    if(block!=-1)
+	    {
+		    //mark as free in indir block metadata
+		    indir.indir_blocks[block-IBLK_STRT]='0';
+		    block_read(block,block_buff);
+		    memcpy(&i_block,block_buff,sizeof(indirect));
+		    //go to that indir block and mark all of it's blocks as free in thier metadata
+		    int j;
+		    for(j=0;j<128;j++)
+		    {
+			    int data_block=i_block.blocks[j];
+			    if(data_block!=-1)
+			    {
+				    data_block=data_block-DISK_STRT;
+				    int md_block=data_block/512;
+				    int md_index=data_block%512;
+				    block_read(md_block+MDATA_STRT,block_buff);
+				    memcpy(&metadata,block_buff,sizeof(data_list));
+				    metadata.data[md_index]='0';
+				    memcpy(block_buff,&metadata,sizeof(data_list));
+				    block_write(md_block+MDATA_STRT,block_buff);
+			    }
+		    }
+	    }
+
+    }
+    //double indirect block
+    if(node.double_indirect!=-1)
+    {
+	indir.d_indir_block=-1;
+	indirect d_block;
+	block_read(DIBLK,block_buff);
+	memcpy(&d_block,block_buff,sizeof(indirect));
+	for(i=0;i<128;i++)
+	{
+		int block=d_block.data[i];
+		if(block!=-1)
+		{
+			//go to that indirect block
+			indir.indir_blocks[block-IBLK_STRT]='0';
+			block_read(block,block_buff);
+			memcpy(&i_block,block_buff,sizeof(indirect));
+			int j;
+			for(j=0;j<128;j++)
+			{
+				int data_block=i_block.blocks[j];
+				if(data_block!=-1)
+				{
+					data_block=data_block-DISK_STRT;
+					int md_block=data_block/512;
+					int md_index=data_block%512;
+					block_read(md_block+MDATA_STRT,block_buff);
+					memcpy(&metadata,block_buff,sizeof(data_list));
+					metadata.data[md_index]='0';
+					memcpy(block_buff,&metadata,sizeof(data_list));
+					block_write(md_block+MDATA_STRT,block_buff);
+				}
+			}
+		}
+	}
+    }
+    memcpy(block_buff,&indir,sizeof(indir_data));
+    block_write(INDIR_DATA,block_buff);
+
+    log_msg("\nsfs_unlink finished\n");
     return retstat;
 }
 
@@ -239,10 +447,8 @@ int sfs_unlink(const char *path)
 int sfs_open(const char *path, struct fuse_file_info *fi)
 {
     int retstat = 0;
-    log_msg("\nsfs_open(path\"%s\", fi=0x%08x)\n",
-	    path, fi);
+    log_msg("\nsfs_open(path\"%s\", fi=0x%08x)\n",path, fi);
 
-    
     return retstat;
 }
 
@@ -286,19 +492,7 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
     int retstat = 0;
     log_msg("\nsfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
 	    path, buf, size, offset, fi);
-    
-   int position = 0;  
-   inode * file_i;
-   /**
-   * (using inodes) code to parse directory path into a position into a block number
-   * still going under assumption of direct mapping, so account for a single inode case
-   */
-   position = file_i->data_blocks[0];
-   block_read(position, block_buff);
-   for (; retstat < size; retstat++)
-   {
-	buf[retstat] = block_buff[offset + retstat];
-   }
+
    
     return retstat;
 }
