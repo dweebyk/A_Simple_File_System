@@ -401,7 +401,7 @@ int sfs_unlink(const char *path)
 	memcpy(&d_block,block_buff,sizeof(indirect));
 	for(i=0;i<128;i++)
 	{
-		int block=d_block.data[i];
+		int block=d_block.blocks[i];
 		if(block!=-1)
 		{
 			//go to that indirect block
@@ -583,6 +583,28 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
 	       struct fuse_file_info *fi)
 {
     int retstat = 0;
+
+    DIR *dir;
+    struct dirent *dir_entry;
+
+    dir = (DIR*) fi->fh;
+
+    //if the first call to readdir returns NULL, error
+    if (dir_entry == 0)
+    {
+	return -errno;
+    }
+
+    do
+    {
+	if(filler(buf, dir_entry->d_name, NULL, 0) != 0)
+	{
+	    log_msg("Buffer is full");
+	    return -ENOMEM;
+	}
+    }while ((dir_entry = readdir(dir)) != NULL);
+
+    log_msg("\nsfs_readdir(path = \"%s\", fi=0x%08x)\n", path, fi);
     
     
     return retstat;
