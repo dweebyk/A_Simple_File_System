@@ -227,7 +227,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     int i;
     inode node;
     //find the file
-    for(i=0;i<sb.num_files;i++)
+    for(i=0;i<NUM_NODES;i++)
     {
 	    if(sb.node_list[i]=='1')
 	    {
@@ -240,7 +240,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 	    	}
 	    }
     }
-    if(i==sb.num_files)
+    if(i==NUM_NODES)
     {
 	    log_msg("\ncould not find file to getattr\n");
 		statbuf->st_ino=129;
@@ -686,7 +686,7 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
 
     int i;
     inode node;
-    for(i=0; i<sb.num_files; i++)
+    for(i=0; i<NUM_NODES; i++)
     {
 	if(sb.node_list[i] == '1')
 	{
