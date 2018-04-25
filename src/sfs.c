@@ -246,7 +246,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 		statbuf->st_ino=129;
 		statbuf->st_uid=getuid();
 		statbuf->st_gid=getgid();
-		statbuf->st_mode=(S_IRWXU|S_IRWXG|S_IRWXO);//&~S_IXUSR&~S_IXGRP&~S_IXOTH;
+		statbuf->st_mode=(S_IFREG|S_IRWXU|S_IRWXG|S_IRWXO);//&~S_IXUSR&~S_IXGRP&~S_IXOTH;
 		statbuf->st_nlink=1;
 		statbuf->st_size=0;
 		statbuf->st_blocks=0;
@@ -264,7 +264,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     	statbuf->st_uid=getuid();
     	statbuf->st_gid=getgid();
 	//statbuf->st_blksize=(blksize_t)512;
-   	statbuf->st_mode=(S_IRWXU|S_IRWXG|S_IRWXO);//&~S_IXUSR&~S_IXGRP&~S_IXOTH;
+   	statbuf->st_mode=(S_IFREG|S_IRWXU|S_IRWXG|S_IRWXO);//&~S_IXUSR&~S_IXGRP&~S_IXOTH;
    	statbuf->st_nlink=node.link_count;
 	statbuf->st_size=node.size;
 	float num_blocks=(node.size)/512.0;
@@ -333,7 +333,7 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     inode new;
     new.node_num=pos+1;
 log_msg("\ncreate inode number %d\n",pos+1);
-    new.mode=(S_IRWXU|S_IRWXG|S_IRWXO);
+    new.mode=(S_IFREG|S_IRWXU|S_IRWXG|S_IRWXO);
     new.link_count=1;
     new.size=0;
     new.access=(long)time(NULL);
