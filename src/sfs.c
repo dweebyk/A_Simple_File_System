@@ -209,7 +209,6 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     memcpy(&sb,block_buff,sizeof(superblock));
     if(strcmp(path,"/")==0)
     {
-	    //
 	    //get root info stored in sb
 	    statbuf->st_ino=0;
 	    statbuf->st_uid=getuid();
@@ -222,7 +221,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 	    statbuf->st_mtime=sb.modify;
 	    statbuf->st_ctime=sb.change;
 	    free(block_buff);
-		log_msg("\nfinished getattr for root\n");
+	    log_msg("\nfinished getattr for root\n");
 	    return retstat;
     }
     int i;
@@ -230,36 +229,42 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     //find the file
     for(i=0;i<sb.num_files;i++)
     {
-	    block_read(i+NODE_STRT,block_buff);
-	    memcpy(&node,block_buff,sizeof(inode));
-	    if(strcmp(&path[1],node.name)==0)
+	    if(sb.node_list[i]=='1')
 	    {
+		log_msg("\nfound an inode\n");
+	    	block_read(i+NODE_STRT,block_buff);
+	    	memcpy(&node,block_buff,sizeof(inode));
+	    	if(strcmp(&path[1],node.name)==0)
+	    	{
 		    break;
+	    	}
 	    }
     }
     if(i==sb.num_files)
     {
 	    log_msg("\ncould not find file to getattr\n");
-		statbuf->st_ino=-1;
+		statbuf->st_ino=129;
 		statbuf->st_uid=getuid();
 		statbuf->st_gid=getgid();
-		statbuf->st_mode=S_IRWXU|S_IRWXG|S_IRWXO;
-		statbuf->st_nlink=0;
+		statbuf->st_mode=(S_IRWXU|S_IRWXG|S_IRWXO);//&~S_IXUSR&~S_IXGRP&~S_IXOTH;
+		statbuf->st_nlink=1;
 		statbuf->st_size=0;
 		statbuf->st_blocks=0;
 		statbuf->st_atime=time(NULL);
 		statbuf->st_mtime=time(NULL);
 		statbuf->st_ctime=time(NULL);
+		retstat=-ENOENT;
 
     }
     else
     {
 	//fill stat
+	log_msg("\nreading data from inode number %d\n",node.node_num);
 	statbuf->st_ino=node.node_num;
     	statbuf->st_uid=getuid();
     	statbuf->st_gid=getgid();
 	//statbuf->st_blksize=(blksize_t)512;
-   	statbuf->st_mode=S_IRWXU|S_IRWXG|S_IRWXO;
+   	statbuf->st_mode=(S_IRWXU|S_IRWXG|S_IRWXO);//&~S_IXUSR&~S_IXGRP&~S_IXOTH;
    	statbuf->st_nlink=node.link_count;
 	statbuf->st_size=node.size;
 	float num_blocks=(node.size)/512.0;
@@ -274,7 +279,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     }
     free(block_buff);
 
-	log_msg("\ngetattr finished\n");
+    log_msg("\ngetattr finished\n");
     return retstat;
 }
 
@@ -326,8 +331,9 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     }
     //initialize new inode
     inode new;
-    new.node_num=i+1;
-    new.mode=mode;
+    new.node_num=pos+1;
+log_msg("\ncreate inode number %d\n",pos+1);
+    new.mode=(S_IRWXU|S_IRWXG|S_IRWXO);
     new.link_count=1;
     new.size=0;
     new.access=(long)time(NULL);
@@ -347,6 +353,8 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     sb.num_files=sb.num_files+1;
     memcpy(block_buff,&new,sizeof(inode));
     block_write(pos+NODE_STRT,block_buff);
+    memcpy(block_buff,&sb,sizeof(superblock));
+    block_write(0,block_buff);
     free(block_buff);
 
     log_msg("\nsfs_create finished\n");
@@ -671,18 +679,6 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
 {
     int retstat = 0;
     
-    
-    return retstat;
-}
-
-/** Release directory
- *
- * Introduced in version 2.3
- */
-int sfs_releasedir(const char *path, struct fuse_file_info *fi)
-{
-    int retstat = 0;
-
     superblock sb;
     char* block_buff = malloc(BLOCK_SIZE);
     block_read(0,block_buff);
@@ -704,6 +700,18 @@ int sfs_releasedir(const char *path, struct fuse_file_info *fi)
 	}
     }
     free(block_buff);	
+   
+    return retstat;
+}
+
+/** Release directory
+ *
+ * Introduced in version 2.3
+ */
+int sfs_releasedir(const char *path, struct fuse_file_info *fi)
+{
+    int retstat = 0;
+
     
     return retstat;
 }
