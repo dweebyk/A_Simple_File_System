@@ -303,7 +303,7 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     {
 	    //file name too long
 	    log_msg("\nfile name too long\n");
-	    retstat=-1;
+	    retstat=-E2BIG;
 	    return retstat;
     }
     superblock sb;
@@ -314,11 +314,27 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     {
 	    //fs is full
 	    log_msg("\nfs is full\n");
-	    retstat=-1;
+	    retstat=-ENOSPC;
 	    free(block_buff);
 	    return retstat;
     }
     int i,pos=0;
+    //check to see if there is a file of the same name
+    for(i=0;i<NUM_NODES;i++)
+    {
+	if(sb.node_list[i]=='1')
+	{
+		block_read(i+NODE_STRT,block_buff);
+		memcpy(&node,block_buff,sizeof(inode));
+		if(strcmp(node.name,&(path[1]))==0)
+		{
+			log_msg("\nfile already exists\n");
+			free(block_buff);
+			retstat=-EEXIST;
+			return retstat;
+		}
+	}	
+    }
     for(i=0;i<NUM_NODES;i++)
     {
 	    //find empty inode
@@ -332,7 +348,7 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     //initialize new inode
     inode new;
     new.node_num=pos+1;
-log_msg("\ncreate inode number %d\n",pos+1);
+    log_msg("\ncreate inode number %d\n",pos+1);
     new.mode=(S_IFREG|S_IRWXU|S_IRWXG|S_IRWXO);
     new.link_count=1;
     new.size=0;
@@ -373,7 +389,7 @@ int sfs_unlink(const char *path)
     char* block_buff=malloc(BLOCK_SIZE);
     block_read(0,block_buff);
     memcpy(&sb,block_buff,sizeof(superblock));
-    //mark the inode as free
+    //find the file
     for(i=0;i<NUM_NODES;i++)
     {
 	if(sb.node_list[i]=='1')
@@ -390,7 +406,7 @@ int sfs_unlink(const char *path)
     if(i==NUM_NODES)
     {
 	    log_msg("\ndid not find file\n");
-	    retstat=-1;
+	    retstat=-ENOENT;
 	    free(block_buff);
 	    return retstat;
     }
@@ -529,11 +545,13 @@ int sfs_open(const char *path, struct fuse_file_info *fi)
     if(i==NUM_NODES)
     {
 	    log_msg("\ndid not find file\n");
-	    retstat=-1;
+	    retstat=-ENOENT;
 	    free(block_buff);
 	    return retstat;
     }
     //check permissions of file
+    //files have all permissions
+/*
     mode_t permission=node.mode;
     if(permission^S_IRUSR==0||permission^S_IWUSR==0)
     {
@@ -542,6 +560,7 @@ int sfs_open(const char *path, struct fuse_file_info *fi)
 	log_msg("\nfailed open on permissions\n");
 	return retstat;
     }
+*/
     free(block_buff);
 
     log_msg("\nopened file\n");
@@ -566,7 +585,7 @@ int sfs_release(const char *path, struct fuse_file_info *fi)
 {
     int retstat = 0;
     log_msg("\nsfs_release(path=\"%s\", fi=0x%08x)\n",path, fi);
-    
+    //nothing to be done  
     log_msg("\nrelease finished\n");
     return retstat;
 }
@@ -585,10 +604,124 @@ int sfs_release(const char *path, struct fuse_file_info *fi)
 int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
     int retstat = 0;
-    log_msg("\nsfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
-	    path, buf, size, offset, fi);
+    log_msg("\nsfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",path, buf, size, offset, fi);
 
-   
+    int i;
+    superblock sb;
+    inode node;
+    char* block_buff=malloc(BLOCK_SIZE);
+    block_read(0,block_buff);
+    memcpy(&sb,block_buff,sizeof(superblock));
+    //check for existance of file
+    for(i=0;i<NUM_NODES;i++)
+    {
+	if(sb.node_list[i]=='1')
+	{
+		block_read(i+NODE_STRT,block_buff);
+		memcpy(&node,block_buff,sizeof(inode));
+		if(strcmp(node.name,&(path[1]))==0)
+		{
+			break;
+		}
+	}
+    }
+    if(i==NUM_NODES)
+    {
+	    log_msg("\ndid not find file\n");
+	    retstat=-ENOENT;
+	    free(block_buff);
+	    return retstat;
+    }
+    //read from the inode
+    size_t count=0;
+    int start_block=((int)offset)/BLOCK_SIZE;
+    int start_index=((int)offset)%BLOCK_SIZE;
+    int from;
+    while((size+count)<node.size||count!=node.size)
+    {
+    	//find block to start reading at
+    	if(start_block>(32+128*64))
+    	{
+		//read from double indirect (block #s 8224-24607)
+		block_read(node.doulbe_indirect,block_buff);
+		indirect indir;
+		memcpy(&indir,block_buff,sizeof(indirect));
+		int indir_index=indir.data[(start_block-8224)/128];
+		block_read(indir_index,block_buff);
+		memcpy(&indir,block_buff,sizeof(indirect));
+		from=indir.blocks[(start_block-8224)%128];
+	}
+    	else if(start_block>31)
+    	{
+		//read from single indirects (block #s 32-8223)
+		int indir_index=node.single_indirect[(start_block-32)/128];
+		block_read(indir_index,block_buff);
+		indirect indir;
+		memcpy(&indir,block_buff,sizeof(indirect));
+		from=indir.blocks[(start_block-32)%128];	
+    	}
+    	else
+    	{
+		//read from direct (block #s 0-31)
+		from=node.direct[start_block];
+    	}
+	block_read(from,block_buff);
+	//read from that block into buffer
+	if(count==0)
+	{
+		if(size>node.size)
+		{
+			//trying to read more than what is there	
+			memcpy(buff,block_buff,node.size);
+			count=node.size;
+			break;
+		} 
+		else if(size<BLOCK_SIZE)
+		{
+			//total request is less than a block
+			memcpy(buff,&(block_buff[start_index]),size);
+			count=size;
+			break;
+		}
+		else
+		{
+			//total request is larger than a block
+			memcpy(buff,&(block_buff[start_index],BLOCK_SIZE-start_index);
+			count+=BLOCK_SIZE-start_index;
+			start_block++;
+		}
+	}
+	else
+	{
+		if(count==node.size/BLOCK_SIZE&&size-count>node.size-count)
+		{
+			//trying to read more than what is there
+			memcpy(&(buff[count]),block_buff,node.size%BLOCK_SIZE);
+			count+=node.size%BLOCK_SIZE;
+			break;
+		}
+		else if(size-count<BLOCK_SIZE)
+		{
+			//less than a block to go
+			memcpy(&(buff[count]),block_buff,BLOCK_SIZE-(size-count));
+			count+=BLOCK_SIZE-(size-count);
+			break;
+		}
+		else
+		{
+			//whole block is requested and more to go
+			memcpy(&(buff[count]),block_buff,BLOCK_SIZE);
+			count+=BLOCK_SIZE;
+			start_block++;
+		}
+	}
+    }  
+    for(;count<size;count++)
+    {
+	//pad if needed
+	buff[count]='\0';
+    }
+    retstat=count;
     return retstat;
 }
 
@@ -694,7 +827,7 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
 	    memcpy(&node, block_buff, sizeof(inode));
 	    if(filler(buf, node.name, NULL, 0) != 0)
 	    {
-		log_msg("Buffer is full!\n");
+		log_msg("\nBuffer is full!\n");
 		return -ENOMEM;
 	    }
 	}
