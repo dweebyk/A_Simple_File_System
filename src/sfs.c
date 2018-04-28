@@ -74,7 +74,6 @@ typedef struct _indir_data
 typedef struct _data_list
 {
 	//could have made this more efficient with bit-wise operations, but less mistakes this way
-	//also have the room
 	char data[512];
 } data_list;
 
@@ -97,6 +96,64 @@ typedef struct _super_block
 // Prototypes for all these functions, and the C-style comments,
 // come indirectly from /usr/include/fuse.h
 //
+
+int find_indirect()
+{
+	indir_data indir;
+	char* block_buff=malloc(BLOCK_SIZE);
+	block_read(INDIR_DATA,block_buff);
+	memcpy(&indir,block_buff,sizeof(indir_data));
+	int i;
+	for(i=0;i<192;i++)
+	{
+		if(indir.indir_blocks[i]=='0')
+		{
+			indir.indir_blocks[i]='1';
+			memcpy(block_buff,&indir,sizeof(indir_data));
+			block_write(INDIR_DATA,block_buff);
+			//go to it and set all pointers to -1
+			block_read(i+IBLK_STRT,block_buff);
+			indirect new;
+			memcpy(&new,block_buff,sizeof(indirect));
+			int j;
+			for(j=0;j<128;j++)
+			{
+				new.blocks[j]=-1;
+			}		
+			memcpy(block_buff,&new,sizeof(indirect));
+			block_write(i+IBLK_STRT,block_buff);
+			return i+IBLK_STRT;
+		}			
+	}
+	return -1;
+}
+
+
+int find_direct()
+{
+	//find and return the number of the first free data disk block
+	int k,l,from=-1;
+	data_list metadata;
+	char* block_buff=malloc(BLOCK_SIZE);
+	for(k=0;k<56;k++)
+	{
+		block_read(k+MDATA_STRT,block_buff);
+		memcpy(&metadata,block_buff,sizeof(data_list));
+		for(l=0;l<512;l++)
+		{
+			if(metadata.data[l]=='0')
+			{
+				metadata.data[l]='1';
+				memcpy(block_buff,&metadata,sizeof(data_list));
+				block_write(k+MDATA_STRT,block_buff);
+				free(block_buff);
+				return DISK_STRT+((k+1)*l);
+			}
+		}	
+	}
+	free(block_buff);
+	return -1;
+}
 
 /**
  * Initialize filesystem
@@ -246,7 +303,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 		statbuf->st_ino=129;
 		statbuf->st_uid=getuid();
 		statbuf->st_gid=getgid();
-		statbuf->st_mode=(S_IFREG|S_IRWXU|S_IRWXG|S_IRWXO);//&~S_IXUSR&~S_IXGRP&~S_IXOTH;
+		statbuf->st_mode=(S_IFREG|S_IRWXU|S_IRWXG|S_IRWXO);
 		statbuf->st_nlink=1;
 		statbuf->st_size=0;
 		statbuf->st_blocks=0;
@@ -264,10 +321,10 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     	statbuf->st_uid=getuid();
     	statbuf->st_gid=getgid();
 	//statbuf->st_blksize=(blksize_t)512;
-   	statbuf->st_mode=(S_IFREG|S_IRWXU|S_IRWXG|S_IRWXO);//&~S_IXUSR&~S_IXGRP&~S_IXOTH;
+   	statbuf->st_mode=(S_IFREG|S_IRWXU|S_IRWXG|S_IRWXO);
    	statbuf->st_nlink=node.link_count;
 	statbuf->st_size=node.size;
-	float num_blocks=(node.size)/512.0;
+	float num_blocks=node.size/512.0;
 	if(num_blocks-(int)num_blocks!=0)
 	{
 		num_blocks++;
@@ -319,6 +376,7 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	    return retstat;
     }
     int i,pos=0;
+    inode node;
     //check to see if there is a file of the same name
     for(i=0;i<NUM_NODES;i++)
     {
@@ -605,7 +663,6 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 {
     int retstat = 0;
     log_msg("\nsfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",path, buf, size, offset, fi);
-
     int i;
     superblock sb;
     inode node;
@@ -621,6 +678,9 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 		memcpy(&node,block_buff,sizeof(inode));
 		if(strcmp(node.name,&(path[1]))==0)
 		{
+			node.access=time(NULL);
+			memcpy(block_buff,&node,sizeof(inode));
+			block_write(i+NODE_STRT,block_buff);
 			break;
 		}
 	}
@@ -637,16 +697,16 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
     int start_block=((int)offset)/BLOCK_SIZE;
     int start_index=((int)offset)%BLOCK_SIZE;
     int from;
-    while((size+count)<node.size||count!=node.size)
+    while(1)
     {
     	//find block to start reading at
     	if(start_block>(32+128*64))
     	{
 		//read from double indirect (block #s 8224-24607)
-		block_read(node.doulbe_indirect,block_buff);
+		block_read(node.double_indirect,block_buff);
 		indirect indir;
 		memcpy(&indir,block_buff,sizeof(indirect));
-		int indir_index=indir.data[(start_block-8224)/128];
+		int indir_index=indir.blocks[(start_block-8224)/128];
 		block_read(indir_index,block_buff);
 		memcpy(&indir,block_buff,sizeof(indirect));
 		from=indir.blocks[(start_block-8224)%128];
@@ -665,28 +725,31 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 		//read from direct (block #s 0-31)
 		from=node.direct[start_block];
     	}
+	log_msg("\nreading from block %d\n",from);
 	block_read(from,block_buff);
 	//read from that block into buffer
 	if(count==0)
 	{
+		log_msg("%->%d\n",node.size);
 		if(size>node.size)
 		{
 			//trying to read more than what is there	
-			memcpy(buff,block_buff,node.size);
+			memcpy(buf,block_buff,node.size);
 			count=node.size;
+			log_msg("\ncount is %d\n",count);
 			break;
 		} 
 		else if(size<BLOCK_SIZE)
 		{
 			//total request is less than a block
-			memcpy(buff,&(block_buff[start_index]),size);
+			memcpy(buf,&(block_buff[start_index]),size);
 			count=size;
 			break;
 		}
 		else
 		{
 			//total request is larger than a block
-			memcpy(buff,&(block_buff[start_index],BLOCK_SIZE-start_index);
+			memcpy(buf,&(block_buff[start_index]),BLOCK_SIZE-start_index);
 			count+=BLOCK_SIZE-start_index;
 			start_block++;
 		}
@@ -696,33 +759,38 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 		if(count==node.size/BLOCK_SIZE&&size-count>node.size-count)
 		{
 			//trying to read more than what is there
-			memcpy(&(buff[count]),block_buff,node.size%BLOCK_SIZE);
+			memcpy(&(buf[count]),block_buff,node.size%BLOCK_SIZE);
 			count+=node.size%BLOCK_SIZE;
 			break;
 		}
 		else if(size-count<BLOCK_SIZE)
 		{
 			//less than a block to go
-			memcpy(&(buff[count]),block_buff,BLOCK_SIZE-(size-count));
+			memcpy(&(buf[count]),block_buff,BLOCK_SIZE-(size-count));
 			count+=BLOCK_SIZE-(size-count);
 			break;
 		}
 		else
 		{
 			//whole block is requested and more to go
-			memcpy(&(buff[count]),block_buff,BLOCK_SIZE);
+			memcpy(&(buf[count]),block_buff,BLOCK_SIZE);
 			count+=BLOCK_SIZE;
 			start_block++;
 		}
 	}
-    }  
+    } 
+    log_msg("\ncount is %d\n",count); 
     for(;count<size;count++)
     {
 	//pad if needed
-	buff[count]='\0';
+	buf[count]='\0';
     }
+    buf[count--]='\0';
+    log_msg("\ncount is %d\n",count); 
+    log_msg("\nbuf=%s\n",buf);
     retstat=count;
-    return retstat;
+    log_msg("\nread finished\n");
+    return -EOF;
 }
 
 /** Write data to an open file
@@ -733,14 +801,140 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
  *
  * Changed in version 2.2
  */
-int sfs_write(const char *path, const char *buf, size_t size, off_t offset,
-	     struct fuse_file_info *fi)
+int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struct fuse_file_info *fi)
 {
     int retstat = 0;
-    log_msg("\nsfs_write(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
-	    path, buf, size, offset, fi);
-    
-    
+    log_msg("\nsfs_write(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",path, buf, size, offset, fi);
+
+    //check if file exists
+    int i;
+    superblock sb;
+    inode node;
+    char* block_buff=malloc(BLOCK_SIZE);
+    block_read(0,block_buff);
+    memcpy(&sb,block_buff,sizeof(superblock));
+    //check for existance of file
+    for(i=0;i<NUM_NODES;i++)
+    {
+	if(sb.node_list[i]=='1')
+	{
+		block_read(i+NODE_STRT,block_buff);
+		memcpy(&node,block_buff,sizeof(inode));
+		if(strcmp(node.name,&(path[1]))==0)
+		{
+			node.modify=time(NULL);
+			break;
+		}
+	}
+    }
+    if(i==NUM_NODES)
+    {
+	    log_msg("\ndid not find file\n");
+	    retstat=-ENOENT;
+	    free(block_buff);
+	    return retstat;
+    }
+    log_msg("\nbuf is %s\n",buf);
+    size_t count=0;
+    int start_block=((int)offset)/BLOCK_SIZE;
+    int start_index=((int)offset)%BLOCK_SIZE;
+    int from;
+    while(count<size)
+    {
+    	//find block to start writing to
+    	if(start_block>(32+128*64))
+    	{
+		//write to double indirect (block #s 8224-24607)
+		if(node.double_indirect==-1)
+		{
+			//find an indirect
+		}
+		block_read(node.double_indirect,block_buff);
+		indirect indir;
+		memcpy(&indir,block_buff,sizeof(indirect));
+		int indir_index=indir.blocks[(start_block-8224)/128];
+		if(indir_index==-1)
+		{
+			//find an indirect
+		}
+		block_read(indir_index,block_buff);
+		memcpy(&indir,block_buff,sizeof(indirect));
+		from=indir.blocks[(start_block-8224)%128];
+		if(from==-1)
+		{
+			//try to find free block
+			from=find_direct();
+			indir.blocks[(start_block-32)%128]=from;
+			memcpy(block_buff,&indir,sizeof(indirect));
+			block_write(indir_index,block_buff);	
+		}
+	}
+    	else if(start_block>31)
+    	{
+		//write to single indirects (block #s 32-8223)
+		int indir_index=node.single_indirect[(start_block-32)/128];
+		if(indir_index==-1)
+		{
+			//find an indirect
+			indir_index=find_indirect();
+			node.single_indirect[(start_block-32)/128]=indir_index;
+		}
+		block_read(indir_index,block_buff);
+		indirect indir;
+		memcpy(&indir,block_buff,sizeof(indirect));
+		from=indir.blocks[(start_block-32)%128];	
+		if(from==-1)
+		{
+			//try to find free block
+			from=find_direct();
+			indir.blocks[(start_block-32)%128]=from;
+			memcpy(block_buff,&indir,sizeof(indirect));
+			block_write(indir_index,block_buff);	
+		}
+    	}
+    	else
+    	{
+		//write to directs (block #s 0-31)
+		from=node.direct[start_block];
+		if(from==-1)
+		{
+			//try to find free block
+			from=find_direct();
+			node.direct[start_block]=from;
+		}
+    	}
+	if(from==-1)
+	{
+		//system out of memory
+		memcpy(block_buff,&node,sizeof(inode));
+		block_write(NODE_STRT+node.node_num,block_buff);
+		return -1;
+	}
+	log_msg("\nwriting to block %d\n",from);
+	block_read(from,block_buff);
+	//write to that block
+	if((size-count)>=BLOCK_SIZE)
+	{
+		//writing at least an entire block
+		memcpy(&(block_buff[start_index]),&(buf[count]),BLOCK_SIZE);
+		count+=BLOCK_SIZE;
+		block_write(from,block_buff);
+	}
+	else
+	{
+		//less than a block to write
+		memcpy(&(block_buff[start_index]),&(buf[count]),size-count);
+		count+=size-count;
+		block_write(from,block_buff);
+		break;
+	}
+	start_index=0;
+	start_block++;
+    }  
+    memcpy(block_buff,&node,sizeof(inode));
+    block_write(i+NODE_STRT,block_buff);
+
+    log_msg("\nwrite finished\n");
     return retstat;
 }
 
