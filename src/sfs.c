@@ -726,11 +726,21 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 		from=node.direct[start_block];
     	}
 	log_msg("\nreading from block %d\n",from);
+	if(from==-1)
+	{
+		//trying to read further than it owns
+		//
+		//
+		//
+		//
+		//
+		//
+	}
 	block_read(from,block_buff);
 	//read from that block into buffer
 	if(count==0)
 	{
-		log_msg("%->%d\n",node.size);
+		log_msg("\nfile size=%d\n",node.size);
 		if(size>node.size)
 		{
 			//trying to read more than what is there	
@@ -785,12 +795,12 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 	//pad if needed
 	buf[count]='\0';
     }
-    buf[count--]='\0';
+    buf[count-1]='\0';
     log_msg("\ncount is %d\n",count); 
     log_msg("\nbuf=%s\n",buf);
     retstat=count;
     log_msg("\nread finished\n");
-    return -EOF;
+    return retstat;
 }
 
 /** Write data to an open file
@@ -848,6 +858,14 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struc
 		if(node.double_indirect==-1)
 		{
 			//find an indirect
+			node.double_indirect=find_indirect();
+			if(node.double_indirect==-1)
+			{
+				//fs is full
+				//
+				//
+				//
+			}
 		}
 		block_read(node.double_indirect,block_buff);
 		indirect indir;
@@ -931,8 +949,10 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struc
 	start_index=0;
 	start_block++;
     }  
+    node.size+=count;
     memcpy(block_buff,&node,sizeof(inode));
     block_write(i+NODE_STRT,block_buff);
+    retstat=count;
 
     log_msg("\nwrite finished\n");
     return retstat;
