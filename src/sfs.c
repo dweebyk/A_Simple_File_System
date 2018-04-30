@@ -41,7 +41,7 @@
 #define MDATA_STRT 322
 #define INDIR_DATA 378
 #define DISK_STRT 379
-#define DISK_END 29051 //not inclusive
+#define DISK_END 29051 
 #define VER 987
 
 typedef struct _inode
@@ -96,6 +96,24 @@ typedef struct _super_block
 // Prototypes for all these functions, and the C-style comments,
 // come indirectly from /usr/include/fuse.h
 //
+
+int find_d_indirect()
+{
+	indir_data indir;
+	char* block_buff=malloc(BLOCK_SIZE);
+	block_read(INDIR_DATA,block_buff);
+	memcpy(&indir,block_buff,sizeof(indir_data));
+	if(indir.d_indir_block=='0')
+	{
+		indir.d_indir_block='1';
+		memcpy(block_buff,&indir,sizeof(indir_data));
+		block_write(INDIR_DATA,block_buff);
+		free(block_buff);
+		return DIBLK;
+	}
+	free(block_buff);
+	return -1;
+}
 
 int find_indirect()
 {
@@ -857,8 +875,8 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struc
 		//write to double indirect (block #s 8224-24607)
 		if(node.double_indirect==-1)
 		{
-			//find an indirect
-			node.double_indirect=find_indirect();
+			//find a double indirect
+			node.double_indirect=find_d_indirect();
 			if(node.double_indirect==-1)
 			{
 				//fs is full
