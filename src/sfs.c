@@ -862,9 +862,9 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struc
 			if(node.double_indirect==-1)
 			{
 				//fs is full
-				//
-				//
-				//
+				memcpy(block_buff,&node,sizeof(inode));
+				block_write(i+NODE_STRT,block_buff);
+				return -ENOSPC;
 			}
 		}
 		block_read(node.double_indirect,block_buff);
@@ -874,6 +874,17 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struc
 		if(indir_index==-1)
 		{
 			//find an indirect
+			indir_index=find_indirect();
+			if(indir_index==-1)
+			{
+				//fs is full
+				memcpy(block_buff,&node,sizeof(inode));
+				block_write(i+NODE_STRT,block_buff);
+				return -ENOSPC;
+			}
+			indir.blocks[(start_block-8224)/128]=indir_index;
+			memcpy(block_buff,&indir,sizeof(indirect));
+			block_write(node.double_indirect,block_buff);
 		}
 		block_read(indir_index,block_buff);
 		memcpy(&indir,block_buff,sizeof(indirect));
@@ -882,6 +893,13 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struc
 		{
 			//try to find free block
 			from=find_direct();
+			if(from==-1)
+			{
+				//fs is full
+				memcpy(block_buff,&node,sizeof(inode));
+				block_write(i+NODE_STRT,block_buff);
+				return -ENOSPC;
+			}
 			indir.blocks[(start_block-32)%128]=from;
 			memcpy(block_buff,&indir,sizeof(indirect));
 			block_write(indir_index,block_buff);	
@@ -895,6 +913,13 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struc
 		{
 			//find an indirect
 			indir_index=find_indirect();
+			if(indir_index==-1)
+			{
+				//fs is full
+				memcpy(block_buff,&node,sizeof(inode));
+				block_write(i+NODE_STRT,block_buff);
+				return -ENOSPC;
+			}
 			node.single_indirect[(start_block-32)/128]=indir_index;
 		}
 		block_read(indir_index,block_buff);
@@ -905,6 +930,13 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struc
 		{
 			//try to find free block
 			from=find_direct();
+			if(from==-1)
+			{
+				//fs is full
+				memcpy(block_buff,&node,sizeof(inode));
+				block_write(i+NODE_STRT,block_buff);
+				return -ENOSPC;
+			}
 			indir.blocks[(start_block-32)%128]=from;
 			memcpy(block_buff,&indir,sizeof(indirect));
 			block_write(indir_index,block_buff);	
@@ -918,16 +950,16 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset,struc
 		{
 			//try to find free block
 			from=find_direct();
+			if(from==-1)
+			{
+				//system out of memory
+				memcpy(block_buff,&node,sizeof(inode));
+				block_write(i+NODE_STRT,block_buff);
+				return -ENOSPC;
+			}
 			node.direct[start_block]=from;
 		}
     	}
-	if(from==-1)
-	{
-		//system out of memory
-		memcpy(block_buff,&node,sizeof(inode));
-		block_write(NODE_STRT+node.node_num,block_buff);
-		return -1;
-	}
 	log_msg("\nwriting to block %d\n",from);
 	block_read(from,block_buff);
 	//write to that block
