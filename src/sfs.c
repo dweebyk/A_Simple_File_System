@@ -165,7 +165,7 @@ int find_direct()
 				memcpy(block_buff,&metadata,sizeof(data_list));
 				block_write(k+MDATA_STRT,block_buff);
 				free(block_buff);
-				return DISK_STRT+((k+1)*l);
+				return DISK_STRT+(512*k+l);
 			}
 		}	
 	}
@@ -747,27 +747,22 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 	if(from==-1)
 	{
 		//trying to read further than it owns
-		//
-		//
-		//
-		//
-		//
-		//
+		return -ESPIPE;
 	}
 	block_read(from,block_buff);
 	//read from that block into buffer
 	if(count==0)
 	{
 		log_msg("\nfile size=%d\n",node.size);
-		if(size>node.size)
+		if(size>node.size&&node.size<=BLOCK_SIZE)
 		{
 			//trying to read more than what is there	
-			memcpy(buf,block_buff,node.size);
+			memcpy(buf,&(block_buff[start_index]),node.size);
 			count=node.size;
 			log_msg("\ncount is %d\n",count);
 			break;
 		} 
-		else if(size<BLOCK_SIZE)
+		else if(size<=BLOCK_SIZE)
 		{
 			//total request is less than a block
 			memcpy(buf,&(block_buff[start_index]),size);
@@ -784,22 +779,26 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 	}
 	else
 	{
-		if(count==node.size/BLOCK_SIZE&&size-count>node.size-count)
+		log_msg("\ntrying to read more\n");
+		if(size>node.size&&(node.size-count)<=BLOCK_SIZE)
 		{
-			//trying to read more than what is there
+			log_msg("\n-1\n");
+			//trying to read more than what is there and at the end
 			memcpy(&(buf[count]),block_buff,node.size%BLOCK_SIZE);
 			count+=node.size%BLOCK_SIZE;
 			break;
 		}
-		else if(size-count<BLOCK_SIZE)
+		else if(size-count<=BLOCK_SIZE)
 		{
+			log_msg("\n-3\n");
 			//less than a block to go
-			memcpy(&(buf[count]),block_buff,BLOCK_SIZE-(size-count));
-			count+=BLOCK_SIZE-(size-count);
+			memcpy(&(buf[count]),block_buff,size-count);
+			count+=(size-count);
 			break;
 		}
 		else
 		{
+			log_msg("\n-3\n");
 			//whole block is requested and more to go
 			memcpy(&(buf[count]),block_buff,BLOCK_SIZE);
 			count+=BLOCK_SIZE;
@@ -813,10 +812,13 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 	//pad if needed
 	buf[count]='\0';
     }
-    buf[count-1]='\0';
+    
     log_msg("\ncount is %d\n",count); 
     log_msg("\nbuf=%s\n",buf);
-    retstat=count;
+    if(retstat!=-EOF)
+    {
+    	retstat=count;
+    }
     log_msg("\nread finished\n");
     return retstat;
 }
