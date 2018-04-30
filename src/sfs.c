@@ -784,8 +784,8 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 		{
 			log_msg("\n-1\n");
 			//trying to read more than what is there and at the end
-			memcpy(&(buf[count]),block_buff,node.size%BLOCK_SIZE);
-			count+=node.size%BLOCK_SIZE;
+			memcpy(&(buf[count]),block_buff,node.size-count);
+			count+=node.size-count;
 			break;
 		}
 		else if(size-count<=BLOCK_SIZE)
